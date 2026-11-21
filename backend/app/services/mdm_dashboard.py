@@ -5,6 +5,7 @@ import datetime
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.model_quality_scope import load_model_quality_scope
 from app.store import store
 
 
@@ -45,19 +46,18 @@ class MdmDashboardService(BaseModuleService):
         panel_data["total_golden_records"] = len(golden)
         panel_data["active_golden"] = sum(1 for g in golden if g.get("status") == "已生效")
 
-        # 聚合重复簇统计
-        clusters = store.rows("dup_cluster")
-        if entity:
-            clusters = [c for c in clusters if c.get("实体模型") == entity]
+        # 共享读取：单次取数确认按模型质量关联数据快照，
+        # 本次看板的重复簇与质量指标均对应这一份已取到的模型范围
+        scope = load_model_quality_scope(entity)
+
+        # 聚合重复簇统计（沿用原口径：簇不按状态过滤，分别统计各状态数量）
+        clusters = scope.duplicate_clusters
         panel_data["total_clusters"] = len(clusters)
         panel_data["pending_clusters"] = sum(1 for c in clusters if c.get("status") == "待确认")
         panel_data["merged_clusters"] = sum(1 for c in clusters if c.get("status") == "已合并")
 
-        # 聚合质量统计
-        quality = store.rows("mdm_quality")
-        if entity:
-            quality = [q for q in quality if q.get("实体模型") == entity]
-        completed_quality = [q for q in quality if q.get("status") == "已完成"]
+        # 聚合质量统计（沿用原口径：仅已完成记录，取最近一条的指标值）
+        completed_quality = scope.quality_records
         if completed_quality:
             latest = completed_quality[-1]
             panel_data["completeness"] = latest.get("完备率", "N/A")
@@ -123,8 +123,9 @@ class MdmDashboardService(BaseModuleService):
     def export_dashboard_report(self, dashboard_id: int) -> dict[str, Any]:
         """导出治理看板报告：将看板数据输出为结构化报告。
 
-        读取看板配置并生成完整治理报告，包含指标数据、
-        生成时间和监控实体信息，供外部系统消费。
+        消费共享读取产出的按模型质量关联数据（经由看板生成入口），
+        按原指标合同生成交付文件，包含指标数据、生成时间和监控实体信息，
+        供外部系统消费；已取到的模型范围不受取数后归属变更影响。
         """
         result = self.generate_governance_dashboard(dashboard_id)
         if not result["ok"]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.model_quality_scope import load_model_quality_scope
 from app.store import store
 
 
@@ -80,30 +81,23 @@ class EntityModelService(BaseModuleService):
     def get_models_with_quality_stats(self) -> list[dict[str, Any]]:
         """获取带质量统计的实体模型列表，关联各模型的重复率和完备率。
 
-        读取实体模型、质量统计和重复簇存储，为每个已生效模型
+        通过共享读取职责取按模型质量关联数据，为每个已生效模型
         聚合质量指标，输出带统计数据的实体模型列表。
         """
         rows = store.rows(self.MODULE)
-        quality_rows = store.rows("mdm_quality")
-        cluster_rows = store.rows("dup_cluster")
         result = []
         for model in rows:
             if model.get("status") != "已生效":
                 continue
             model_name = model.get("模型名称", "")
-            model_quality = [
-                q for q in quality_rows
-                if q.get("实体模型") == model_name and q.get("status") == "已完成"
-            ]
-            model_clusters = [
-                c for c in cluster_rows
-                if c.get("实体模型") == model_name
-            ]
+            # 共享读取：按模型归属取质量记录与重复簇的隔离快照
+            scope = load_model_quality_scope(model_name)
+            # 实体统计口径不变：统计记录数、簇数并输出最近一条质量记录
             result.append({
                 "model_name": model_name,
                 "business_domain": model.get("业务域"),
-                "quality_records": len(model_quality),
-                "duplicate_clusters": len(model_clusters),
-                "latest_quality": model_quality[-1] if model_quality else None,
+                "quality_records": len(scope.quality_records),
+                "duplicate_clusters": len(scope.duplicate_clusters),
+                "latest_quality": scope.latest_quality,
             })
         return result
